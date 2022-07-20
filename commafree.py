@@ -1,13 +1,13 @@
 #!/usr/bin/python3
 
-# Usage: python3 commafree.py n m d
+# Usage: python3 commafree.py k n m
 #
 # Generates clauses that are satisfiable exactly when there exists a set of
-# commafree codewords of size MAXCF(n,m) - d on words of size n using an
-# alphabet of size m. MAXCF(n,m) is the maximum possible size of such a set,
+# commafree codewords of size MAXCF(k,n) - m on words of length k using an
+# alphabet of size n. MAXCF(k,n) is the maximum possible size of such a set,
 # equal to the number of Lyndon words (also called "prime strings" by Knuth)
-# of length n over an alphabet of size m. There's a closed-form formula for
-# MAXCF(n,m) that involves the mobius function [1].
+# of length k over an alphabet of size n. There's a closed-form formula for
+# MAXCF(k,n) that involves the mobius function [1].
 #
 # A set of strings is commafree if no concatenation of any two strings in
 # the set contains another string in the set as a substring that overlaps
@@ -18,13 +18,13 @@
 #
 #   {100, 101, 102, 200, 201, 202, 211, 212}
 #
-# If n is odd, the resulting clauses are satisfiable for any m >= 2 and
-# m > d >= 0 due to results by Eastman [2].
+# If k is odd, the resulting clauses are satisfiable for any n >= 2 and
+# n > m >= 0 due to results by Eastman [2].
 #
-# If n is even, not much is known beyond small values of n and m. Here's a
+# If k is even, not much is known beyond small values of k and n. Here's a
 # sample of what's known:
 #
-# (n,m,d)  | SAT/UNSAT?
+# (k,n,m)  | SAT/UNSAT?
 # ---------------------
 # (2,2,0)  | SAT
 # (2,4,0)  | UNSAT
@@ -42,6 +42,8 @@
 # [2] Eastman, W. L., On the Construction of Comma-Free Codes, IEEE Trans.
 #     IT-11 (1965), pp 263-267.
 
+import argparse
+from collections import defaultdict
 import copy
 import io
 import itertools
@@ -64,23 +66,23 @@ def write_clause(f, c):
     cc += 1
 def num_clauses(): global cc; return cc
 
-# Generates all Lyndon words of length n over alphabet of size m. A Lyndon word
+# Generates all Lyndon words of length k over alphabet of size n. A Lyndon word
 # is a string that is strictly lexicographically smaller than all of its
 # rotations. Comma-free codes can only contain Lyndon words and their rotations.
 # This method is essentially Knuth's Algorithm 7.2.1.1 F from The Art of
 # Computer Programming, Volume 4A. Knuth calls these "prime strings".
-def primes(n, m):
-    a = [-1] + [0]*n
+def primes(k, n):
+    a = [-1] + [0]*k
     j = 1
     while True:
-        if j == n:
+        if j == k:
             yield tuple(a[1:])
-        j = n
-        while a[j] == m-1:
+        j = k
+        while a[j] == n-1:
             j -= 1
         if j == 0: return
         a[j] += 1
-        for i in range(j+1, n+1):
+        for i in range(j+1, k+1):
             a[i] = a[i-j]
 
 # Generates all rotations of a string.
@@ -88,10 +90,6 @@ def primes(n, m):
 def rotations(t):
     for i in range(len(t)):
         yield t[i:]+t[:i]
-
-# Generates clauses satisfiable iff at most one of the variables in vs is true.
-def at_most_one_true(vs):
-    return [(-x,-y) for x,y in itertools.combinations(vs, 2)]
 
 # Given variables a, b, minout, and maxout, generates clauses that are
 # satisfiable iff minout = min(a,b) and maxout = max(a,b).
@@ -121,10 +119,10 @@ def merge(cf, vin, offset):
 # representative variables for each equivalence class of prime strings (under
 # rotation) that asserts "something from this class is chosen". Returns the
 # map of string -> var and the list of representative vars.
-def make_vars(cf, n, m):
+def make_vars(cf, k, n):
     var = {}
     reps = {}
-    for p in primes(n, m):
+    for p in primes(k, n):
         rotvars = []
         for r in rotations(p):
             nv = new_var()
@@ -135,62 +133,146 @@ def make_vars(cf, n, m):
         # or one of its rotations is chosen".
         nv = new_var()
         reps[p] = nv
+        # Ensure that nv is false if none of rotvars is true.
         write_clause(cf, [-nv] + rotvars)
-        for v in rotvars:
-            write_clause(cf, (-v, nv))
     return (var, reps)
 
 # Comma-free codes can't contain three strings x,y,z such that y is a substring
-# of the concatentation of x and z (and has non-empty overlap with x and z).
-# x,y,z can all be chosen with repetition but we're going to assert separately
-# that at most one string per equivalence class (under rotations) is chosen, so
-# we can consider pairs of distinct x,z here and disallow all possible y.
-def disallow_forbidden_triples(cf, n, var):
-    for xx in itertools.combinations(var.items(), 2):
-        qx, qx_id = xx[0]
-        qy, qy_id = xx[1]
-        for x, x_id, y, y_id in [(qx, qx_id, qy, qy_id),
-                                 (qy, qy_id, qx, qx_id)]:
-            for i in range(1,n):
+# of the concatentation xz but not a prefix or suffix of xz. This function
+# returns a naive encoding of these constraints consisting of ternary clauses
+# for every such (x,y,z).
+def commafree_property_naive(cf, k, var):
+    for x, x_id in var.items():
+        for y, y_id in var.items():
+            for i in range(1,k):
                 z = tuple(x[i:]+y[:i])
                 z_id = var.get(z)
                 if z_id is None: continue
                 write_clause(cf, (-x_id, -y_id, -z_id))
 
-def break_symmetry(cf, n, m, var):
-    for i in range(n//2):
-        t = [0]*n
-        t[i] = 1
-        write_clause(cf, (-var[tuple(t)],))
+# Returns True exactly when tuple s has prefix t.
+def tstarts_with(s, t):
+    for i, n in enumerate(t):
+        if s[i] != n: return False
+    return True
+
+assert(tstarts_with((1,2,3,4),(1,)))
+assert(tstarts_with((1,2,3,4),(1,2)))
+assert(tstarts_with((1,2,3,4),(1,2,3)))
+assert(tstarts_with((1,2,3,4),(1,2,3,4)))
+assert(not(tstarts_with((1,2,3,4),(1,3))))
+
+# Returns True exactly when tuple s has suffix t.
+def tends_with(s, t):
+    for i, n in enumerate(t):
+        if s[-len(t)+i] != n: return False
+    return True
+
+assert(tends_with((1,2,3,4),(4,)))
+assert(tends_with((1,2,3,4),(3,4)))
+assert(tends_with((1,2,3,4),(2,3,4)))
+assert(tends_with((1,2,3,4),(1,2,3,4)))
+assert(not(tends_with((1,2,3,4),(1,3))))
+
+# If x and y don't overlap, returns None. Otherwise, for all strings abc where
+# ab = x and bc = y, returns the pair (a,c). Results are returned as a list,
+# arguments are passed as tuples but interpreted as strings.
+def diff(x,y):
+    def intersects(x,y,i):
+        for j in range(len(x)-i):
+            if x[j+i] != y[j]: return False
+        return True
+
+    for i in range(1,len(y)):
+        if not intersects(x,y,i): continue
+        yield (x[:i],y[len(x)-i:])
+
+assert(list(diff((1,2,3),(4,5,6))) == [])
+assert(list(diff((1,2,3),(2,1,3))) == [])
+assert(list(diff((1,2,3),(3,2,1))) == [((1,2),(2,1))])
+assert(list(diff((1,2,3),(2,3,1))) == [((1,),(1,))])
+assert(list(diff((1,2,3),(1,2,3))) == [])
+assert(list(diff((2,2,2,2),(2,2,2,2))) ==
+       [((2,), (2,)), ((2,2), (2,2)), ((2,2,2),(2,2,2))])
+
+# Comma-free codes can't contain three strings x,y,z such that y is a substring
+# of the concatentation of xz but not a prefix or suffix of xz. In contrast to
+# commafree_property_naive, this function compresses the encoding of this
+# constraint with bounded variable addition (BVA).
+def commafree_property_bva(cf, k, n, var):
+    # Precompute two tables of some intersections of var.keys() with var.keys().
+    # If x = ab and y = bc for some non-empty string b, then ri[c] contains
+    # (x_id, y_id) and li[a] contains (x_id, y_id).
+    ri = defaultdict(list)
+    li = defaultdict(list)
+    for x, x_id in var.items():
+        for y, y_id in var.items():
+            for pre, suf in diff(x,y):
+                if len(suf) <= k // 2: ri[suf].append((x_id, y_id))
+                if len(pre) <= k // 2: li[pre].append((x_id, y_id))
+
+    for i in range(1, k // 2):
+        for core in itertools.product(range(n), repeat=i):
+            v = new_var()
+            for x, x_id in var.items():
+                if not tstarts_with(x, core): continue
+                write_clause(cf, (-v, -x_id))
+            for x_id, y_id in ri[core]:
+                write_clause(cf, (v, -x_id, -y_id))
+
+            v = new_var()
+            for x, x_id in var.items():
+                if not tends_with(x, core): continue
+                write_clause(cf, (-v, -x_id))
+            for x_id, y_id in li[core]:
+                write_clause(cf, (v, -x_id, -y_id))
+
+    for core in itertools.product(range(n), repeat = k // 2):
+        v = new_var()
+        for x, x_id in var.items():
+            if not tstarts_with(x, core): continue
+            write_clause(cf, (-v, -x_id))
+        for x_id, y_id in ri[core]:
+            write_clause(cf, (v, -x_id, -y_id))
 
 if __name__ == '__main__':
-    if len(sys.argv) < 4:
-        print('Usage: %s n m d' % sys.argv[0])
-        sys.exit(1)
-    n, m, d = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3])
-    assert (n > 1), "n must be greater than 1"
-    assert (m > 1), "m must be greater than 1"
+    parser = argparse.ArgumentParser(
+        description= 'Generate a DIMACS CNF file for a commafree code.')
+    parser.add_argument('k', type=int, help='codeword length')
+    parser.add_argument('n', type=int, help='alphabet size')
+    parser.add_argument('m', type=int,
+                        help='number of codewords away from optimal')
+    parser.add_argument('--compress', action='store_true',
+                        help='use BVA to compress commafree property')
+    parser.add_argument('--no-compress', dest='compress', action='store_false')
+    parser.set_defaults(compress=True)
+    args = parser.parse_args()
+
+    assert (args.k > 1), "k must be greater than 1"
+    assert (args.n > 1), "n must be greater than 1"
+    assert (args.m >= 0), "m must be non-negative"
 
     with tempfile.TemporaryFile(mode='w+t') as cf:
         # Generate variables for all possible codewords and equivalence classes.
-        var, reps = make_vars(cf, n, m)
+        var, reps = make_vars(cf, args.k, args.n)
         vout = [x for x in reps.values()]
-        assert (d < len(vout)), \
-            "impossible value of d=%s: only %s prime strings" % (d,len(vout))
-
-        # Assert that at most one codeword from each equivalence class (under
-        # rotations) is chosen.
-        for p in primes(n, m):
-            for clause in at_most_one_true([var[r] for r in rotations(p)]):
-                write_clause(cf, clause)
+        assert (args.m < len(vout)), \
+            "impossible value of m=%s: only %s prime strings" % \
+            (args.m, len(vout))
 
         # Cut search space in half by excluding half of the rotations from
-        # one class. Example: with n=6, exclude: 000001, 000010, 000100
-        break_symmetry(cf, n, m, var)
+        # one class. Example: with n=6, exclude: 10000, 010000, 001000
+        for i in range(args.k // 2):
+            t = [0] * args.k
+            t[i] = 1
+            write_clause(cf, (-var[tuple(t)],))
 
         # Don't allow any three strings (x,y,z) in the final set of codewords
         # if y is a substring of the concatenation of x and z.
-        disallow_forbidden_triples(cf, n, var)
+        if args.compress:
+            commafree_property_bva(cf, args.k, args.n, var)
+        else:
+            commafree_property_naive(cf, args.k, var)
 
         # Finally, we need to make an assertion about the size of the set of
         # codewords. When we created variables for each prime string and all of
@@ -201,18 +283,18 @@ if __name__ == '__main__':
         # and the (d+1)st smallest value should be true if we're exactly d away
         # from the maximum possible code size.
         if len(vout) > 1:
-            for i in range(d+1):
+            for i in range(args.m+1):
                 vout = merge(cf, vout, i)
-            for i in range(d):
-                write_clause(cf, [-vout[-1-i]])
-            write_clause(cf, [vout[-1-d]])
+            if args.m > 0:
+                write_clause(cf, [-vout[-args.m]])
+            write_clause(cf, [vout[-1-args.m]])
 
         # Write the final DIMACS file. We've cached clauses in a temp file until
         # now, so we'll rewind and write those out to stdout as a final step.
         sys.stdout.write(
             "c Generated by commafree.py {0}\n".format(' '.join(sys.argv[1:])))
         sys.stdout.write(
-            "c Generator source: github.com/aaw/sat/gen/commafree.py\n")
+            "c Generator source: github.com/aaw/commafree/commafree.py\n")
         for k,v in sorted(reps.items(), key=lambda x: x[1]):
             sys.stdout.write('c var %s == class [%s] used\n' %
                              (v, ''.join(str(x) for x in k)))
