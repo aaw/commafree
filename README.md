@@ -2,7 +2,7 @@
 
 Tools for generating, verifying, and extracting [commafree codes](https://en.wikipedia.org/wiki/Comma-free_code) with a fixed word size.
 
-This code accompanies the article [Computer-Aided Constructions of Commafree Codes](https://link.springer.com/article/10.1007/s10817-023-09662-6).[^1]
+This code accompanies the article [Computer-Aided Constructions of Commafree Codes](https://link.springer.com/article/10.1007/s10817-023-09662-6).[^1] ([preprint](commafree.pdf)).
 
 ## Requirements
 
