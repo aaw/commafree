@@ -2,6 +2,8 @@
 
 Tools for generating, verifying, and extracting [commafree codes](https://en.wikipedia.org/wiki/Comma-free_code) with a fixed word size.
 
+This code accompanies the article [Computer-Aided Constructions of Commafree Codes](https://link.springer.com/article/10.1007/s10817-023-09662-6).[^1]
+
 ## Requirements
 
 [Python3](https://www.python.org/downloads/) and a SAT solver (we use [kissat](https://github.com/arminbiere/kissat) in examples here but any other popular command-line SAT solver should work).
@@ -51,6 +53,9 @@ $ extract-code.py commafree-4-4-3.cnf kissat-4-4-3.out
 
 size: 57
 ```
+
+[^1]: Windsor, A.A. Computer-Aided Constructions of Commafree Codes. J Autom Reasoning 67, 12 (2023). https://doi.org/10.1007/s10817-023-09662-6
+
 
 And to identify the equivalence classes that are missing from a satisfiable result, use `missing-codes.py`:
 
